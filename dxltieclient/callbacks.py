@@ -5,11 +5,37 @@
 
 from __future__ import absolute_import
 
+import logging
+
 from dxlbootstrap.util import MessageUtils
 from dxlclient.callbacks import EventCallback
 from dxltieclient import TieClient
 from .constants import RepChangeEventProp, FileRepChangeEventProp, CertRepChangeEventProp, \
     DetectionEventProp, FirstInstanceEventProp
+
+logger = logging.getLogger(__name__)
+
+
+def _normalize_guid(guid):
+    if not guid:
+        return ""
+    head = str(guid).strip().split(":")[0]
+    return head.strip("{}").lower()
+
+
+def _is_source_matched(payload_dict, event):
+    agent_guid = payload_dict.get(DetectionEventProp.SYSTEM_GUID)
+    source_id = getattr(event, "source_client_id", None)
+    if agent_guid and source_id:
+        agent_norm = _normalize_guid(agent_guid)
+        source_norm = _normalize_guid(source_id)
+        if agent_norm and source_norm and agent_norm != source_norm:
+            logger.warning(
+                "Payload agentGuid (%s) does not match envelope source_client_id (%s)",
+                agent_guid, source_id
+            )
+            return False
+    return True
 
 
 class ReputationChangeCallback(EventCallback):
@@ -289,6 +315,16 @@ class DetectionCallback(EventCallback):
                 # Register detection callback with the client
                 tie_client.add_file_detection_callback(detection_callback)
     """
+    def __init__(self, verify_source=False):
+        """
+        Constructor parameters:
+
+        :param verify_source: Whether to drop events whose payload ``agentGuid``
+            does not match the envelope ``source_client_id`` (defaults to ``False``).
+        """
+        super(DetectionCallback, self).__init__()
+        self._verify_source = bool(verify_source)
+
     def on_event(self, event):
         """
         Invoked when a DXL event has been received.
@@ -300,6 +336,9 @@ class DetectionCallback(EventCallback):
         """
         # Decode the event payload
         detection_dict = MessageUtils.json_payload_to_dict(event)
+
+        if not _is_source_matched(detection_dict, event) and getattr(self, "_verify_source", False):
+            return
 
         # Transform hashes
         if DetectionEventProp.HASHES in detection_dict:
@@ -396,6 +435,16 @@ class FirstInstanceCallback(EventCallback):
                 # Register first instance callback with the client
                 tie_client.add_file_first_instance_callback(first_instance_callback)
     """
+    def __init__(self, verify_source=False):
+        """
+        Constructor parameters:
+
+        :param verify_source: Whether to drop events whose payload ``agentGuid``
+            does not match the envelope ``source_client_id`` (defaults to ``False``).
+        """
+        super(FirstInstanceCallback, self).__init__()
+        self._verify_source = bool(verify_source)
+
     def on_event(self, event):
         """
         Invoked when a DXL event has been received.
@@ -407,6 +456,9 @@ class FirstInstanceCallback(EventCallback):
         """
         # Decode the event payload
         first_instance_dict = MessageUtils.json_payload_to_dict(event)
+
+        if not _is_source_matched(first_instance_dict, event) and getattr(self, "_verify_source", False):
+            return
 
         # Transform hashes
         if FirstInstanceEventProp.HASHES in first_instance_dict:

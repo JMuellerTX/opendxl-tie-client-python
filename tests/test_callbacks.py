@@ -304,3 +304,48 @@ class TestFirstInstanceCallback(TestCase):
             first_instance_callback.original_event_received,
             test_event
         )
+
+    def test_verify_source_rejects_mismatched_agent_guid(self):
+        class VerifiedDetectionCallback(DetectionCallback):
+            def __init__(self):
+                super(VerifiedDetectionCallback, self).__init__(verify_source=True)
+                self.received = None
+
+            def on_detection(self, detection_dict, original_event):
+                self.received = detection_dict
+
+        class VerifiedFirstInstanceCallback(FirstInstanceCallback):
+            def __init__(self):
+                super(VerifiedFirstInstanceCallback, self).__init__(verify_source=True)
+                self.received = None
+
+            def on_first_instance(self, first_instance_dict, original_event):
+                self.received = first_instance_dict
+
+        payload = {
+            DetectionEventProp.SYSTEM_GUID: "{abc5d2c6-e959-11e3-baeb-005056c00009}",
+            DetectionEventProp.NAME: "SPOOFED.EXE"
+        }
+
+        spoofed_event = Event(TEST_TOPIC)
+        spoofed_event._source_client_id = "{11111111-2222-3333-4444-555555555555}"
+        spoofed_event.payload = json.dumps(payload).encode(encoding="UTF-8")
+
+        det_cb = VerifiedDetectionCallback()
+        det_cb.on_event(spoofed_event)
+        self.assertIsNone(det_cb.received)
+
+        fi_cb = VerifiedFirstInstanceCallback()
+        fi_cb.on_event(spoofed_event)
+        self.assertIsNone(fi_cb.received)
+
+        legit_event = Event(TEST_TOPIC)
+        legit_event._source_client_id = "ABC5D2C6-E959-11E3-BAEB-005056C00009:instance-1"
+        legit_event.payload = json.dumps(payload).encode(encoding="UTF-8")
+
+        det_cb.on_event(legit_event)
+        self.assertIsNotNone(det_cb.received)
+
+        fi_cb.on_event(legit_event)
+        self.assertIsNotNone(fi_cb.received)
+
