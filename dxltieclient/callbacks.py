@@ -25,8 +25,7 @@ except NameError:
 def _normalize_guid(guid):
     if not isinstance(guid, _STRING_TYPES):
         return ""
-    head = guid.strip().split(":")[0]
-    return head.strip("{}").lower()
+    return guid.strip().strip("{}").replace("-", "").lower()
 
 
 def _extract_leaf_cert(event):
@@ -37,7 +36,29 @@ def _extract_leaf_cert(event):
     if not isinstance(certs, _STRING_TYPES):
         return ""
     tokens = [t.strip() for t in certs.split(";") if t.strip()]
-    return _normalize_guid(tokens[-1]) if tokens else ""
+    return _normalize_guid(tokens[-1].replace(":", "")) if tokens else ""
+
+
+def _collect_envelope_sources(event):
+    sources = set()
+    if event is None:
+        return sources
+    source_id = getattr(event, "source_client_id", None)
+    if isinstance(source_id, _STRING_TYPES) and source_id:
+        head = _normalize_guid(source_id.split(":")[0])
+        if head:
+            sources.add(head)
+    instance_id = getattr(event, "source_client_instance_id", None) or \
+        getattr(event, "_source_client_instance_id", None)
+    if isinstance(instance_id, _STRING_TYPES) and instance_id:
+        for part in instance_id.split(":"):
+            norm_part = _normalize_guid(part)
+            if norm_part:
+                sources.add(norm_part)
+    cert_norm = _extract_leaf_cert(event)
+    if cert_norm:
+        sources.add(cert_norm)
+    return sources
 
 
 def _decode_payload_dict(event):
@@ -57,21 +78,22 @@ def _is_source_matched(payload_dict, event):
         logger.warning("Event payload is not a JSON object")
         return False
     agent_guid = payload_dict.get(DetectionEventProp.SYSTEM_GUID)
+    if not isinstance(agent_guid, _STRING_TYPES) or ":" in agent_guid:
+        logger.warning("Payload is missing a valid agentGuid (%r)", agent_guid)
+        return False
     agent_norm = _normalize_guid(agent_guid)
     if not agent_norm:
         logger.warning("Payload is missing a valid agentGuid (%r)", agent_guid)
         return False
-    source_id = getattr(event, "source_client_id", None)
-    source_norm = _normalize_guid(source_id)
-    cert_norm = _extract_leaf_cert(event)
-    if not source_norm and not cert_norm:
-        logger.warning("Event envelope has no source_client_id or dxl.certs")
+    envelope_sources = _collect_envelope_sources(event)
+    if not envelope_sources:
+        logger.warning("Event envelope has no source_client_id, source_client_instance_id, or dxl.certs")
         return False
-    if (source_norm and agent_norm == source_norm) or (cert_norm and agent_norm == cert_norm):
+    if agent_norm in envelope_sources:
         return True
     logger.warning(
         "Payload agentGuid (%s) does not match envelope source_client_id (%s) or dxl.certs",
-        agent_guid, source_id
+        agent_guid, getattr(event, "source_client_id", None)
     )
     return False
 

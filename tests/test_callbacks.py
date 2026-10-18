@@ -350,8 +350,8 @@ class TestFirstInstanceCallback(TestCase):
         fi_cb.on_event(legit_event)
         self.assertIsNotNone(fi_cb.received)
 
-        # (a) Missing, empty, "{}", or ":foo" agentGuid must fail closed when verify_source=True
-        for bad_guid in [None, "", "{}", ":foo", 12345]:
+        # (a) Missing, empty, "{}", or ":victim" agentGuid must fail closed when verify_source=True
+        for bad_guid in [None, "", "{}", ":foo", ":victim", 12345]:
             det_cb.received = None
             bad_payload = {DetectionEventProp.NAME: "BYPASS.EXE"}
             if bad_guid is not None:
@@ -361,6 +361,20 @@ class TestFirstInstanceCallback(TestCase):
             bad_event.payload = json.dumps(bad_payload).encode(encoding="UTF-8")
             det_cb.on_event(bad_event)
             self.assertIsNone(det_cb.received)
+
+        # (b) Match via broker-stamped _source_client_instance_id ("<cert_sha1>:{<client_uuid>}")
+        det_cb.received = None
+        fi_cb.received = None
+        broker_event = Event(TEST_TOPIC)
+        broker_event._source_client_id = "65e7960d7bd6b5b7085f9928f8b2374351ca66fb"
+        broker_event._source_client_instance_id = (
+            "65e7960d7bd6b5b7085f9928f8b2374351ca66fb:{abc5d2c6-e959-11e3-baeb-005056c00009}"
+        )
+        broker_event.payload = json.dumps(payload).encode(encoding="UTF-8")
+        det_cb.on_event(broker_event)
+        self.assertIsNotNone(det_cb.received)
+        fi_cb.on_event(broker_event)
+        self.assertIsNotNone(fi_cb.received)
 
         # (c) Match via dxl.certs leaf thumbprint when source_client_id is a session GUID
         det_cb.received = None
@@ -380,5 +394,3 @@ class TestFirstInstanceCallback(TestCase):
         malformed_event.payload = b"[\"not-an-object\"]"
         det_cb.on_event(malformed_event)
         self.assertIsNone(det_cb.received)
-
-
