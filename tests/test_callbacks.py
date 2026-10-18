@@ -341,6 +341,7 @@ class TestFirstInstanceCallback(TestCase):
 
         legit_event = Event(TEST_TOPIC)
         legit_event._source_client_id = "ABC5D2C6-E959-11E3-BAEB-005056C00009:instance-1"
+        legit_event.other_fields["dxl.certs"] = "ca_thumb;435dfd470f727437c7cb4f07cba1f9a1f4272656"
         legit_event.payload = json.dumps(payload).encode(encoding="UTF-8")
 
         det_cb.on_event(legit_event)
@@ -348,4 +349,36 @@ class TestFirstInstanceCallback(TestCase):
 
         fi_cb.on_event(legit_event)
         self.assertIsNotNone(fi_cb.received)
+
+        # (a) Missing, empty, "{}", or ":foo" agentGuid must fail closed when verify_source=True
+        for bad_guid in [None, "", "{}", ":foo", 12345]:
+            det_cb.received = None
+            bad_payload = {DetectionEventProp.NAME: "BYPASS.EXE"}
+            if bad_guid is not None:
+                bad_payload[DetectionEventProp.SYSTEM_GUID] = bad_guid
+            bad_event = Event(TEST_TOPIC)
+            bad_event._source_client_id = "{abc5d2c6-e959-11e3-baeb-005056c00009}"
+            bad_event.payload = json.dumps(bad_payload).encode(encoding="UTF-8")
+            det_cb.on_event(bad_event)
+            self.assertIsNone(det_cb.received)
+
+        # (c) Match via dxl.certs leaf thumbprint when source_client_id is a session GUID
+        det_cb.received = None
+        cert_event = Event(TEST_TOPIC)
+        cert_event._source_client_id = "{99999999-8888-7777-6666-555555555555}"
+        cert_event.other_fields["dxl.certs"] = "root_ca;435DFD470F727437C7CB4F07CBA1F9A1F4272656"
+        cert_event.payload = json.dumps({
+            DetectionEventProp.SYSTEM_GUID: "435dfd470f727437c7cb4f07cba1f9a1f4272656",
+            DetectionEventProp.NAME: "CERT_MATCH.EXE"
+        }).encode(encoding="UTF-8")
+        det_cb.on_event(cert_event)
+        self.assertIsNotNone(det_cb.received)
+
+        # Non-dict / malformed JSON payload must not raise
+        det_cb.received = None
+        malformed_event = Event(TEST_TOPIC)
+        malformed_event.payload = b"[\"not-an-object\"]"
+        det_cb.on_event(malformed_event)
+        self.assertIsNone(det_cb.received)
+
 

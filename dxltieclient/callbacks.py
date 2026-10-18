@@ -16,26 +16,64 @@ from .constants import RepChangeEventProp, FileRepChangeEventProp, CertRepChange
 logger = logging.getLogger(__name__)
 
 
+try:
+    _STRING_TYPES = (basestring,)
+except NameError:
+    _STRING_TYPES = (str,)
+
+
 def _normalize_guid(guid):
-    if not guid:
+    if not isinstance(guid, _STRING_TYPES):
         return ""
-    head = str(guid).strip().split(":")[0]
+    head = guid.strip().split(":")[0]
     return head.strip("{}").lower()
 
 
+def _extract_leaf_cert(event):
+    other_fields = getattr(event, "other_fields", None)
+    if not isinstance(other_fields, dict):
+        return ""
+    certs = other_fields.get("dxl.certs")
+    if not isinstance(certs, _STRING_TYPES):
+        return ""
+    tokens = [t.strip() for t in certs.split(";") if t.strip()]
+    return _normalize_guid(tokens[-1]) if tokens else ""
+
+
+def _decode_payload_dict(event):
+    try:
+        payload_dict = MessageUtils.json_payload_to_dict(event)
+    except Exception as ex:
+        logger.warning("Failed to decode JSON event payload: %s", ex)
+        return None
+    if not isinstance(payload_dict, dict):
+        logger.warning("Expected JSON object payload, got %s", type(payload_dict).__name__)
+        return None
+    return payload_dict
+
+
 def _is_source_matched(payload_dict, event):
+    if not isinstance(payload_dict, dict):
+        logger.warning("Event payload is not a JSON object")
+        return False
     agent_guid = payload_dict.get(DetectionEventProp.SYSTEM_GUID)
+    agent_norm = _normalize_guid(agent_guid)
+    if not agent_norm:
+        logger.warning("Payload is missing a valid agentGuid (%r)", agent_guid)
+        return False
     source_id = getattr(event, "source_client_id", None)
-    if agent_guid and source_id:
-        agent_norm = _normalize_guid(agent_guid)
-        source_norm = _normalize_guid(source_id)
-        if agent_norm and source_norm and agent_norm != source_norm:
-            logger.warning(
-                "Payload agentGuid (%s) does not match envelope source_client_id (%s)",
-                agent_guid, source_id
-            )
-            return False
-    return True
+    source_norm = _normalize_guid(source_id)
+    cert_norm = _extract_leaf_cert(event)
+    if not source_norm and not cert_norm:
+        logger.warning("Event envelope has no source_client_id or dxl.certs")
+        return False
+    if (source_norm and agent_norm == source_norm) or (cert_norm and agent_norm == cert_norm):
+        return True
+    logger.warning(
+        "Payload agentGuid (%s) does not match envelope source_client_id (%s) or dxl.certs",
+        agent_guid, source_id
+    )
+    return False
 
 
 class ReputationChangeCallback(EventCallback):
@@ -90,7 +128,9 @@ class ReputationChangeCallback(EventCallback):
         :param event: The original DXL event message that was received
         """
         # Decode the event payload
-        rep_change_dict = MessageUtils.json_payload_to_dict(event)
+        rep_change_dict = _decode_payload_dict(event)
+        if rep_change_dict is None:
+            return
 
         # Transform hashes
         if RepChangeEventProp.HASHES in rep_change_dict:
@@ -335,9 +375,11 @@ class DetectionCallback(EventCallback):
         :param event: The original DXL event message that was received
         """
         # Decode the event payload
-        detection_dict = MessageUtils.json_payload_to_dict(event)
+        detection_dict = _decode_payload_dict(event)
+        if detection_dict is None:
+            return
 
-        if not _is_source_matched(detection_dict, event) and getattr(self, "_verify_source", False):
+        if getattr(self, "_verify_source", False) and not _is_source_matched(detection_dict, event):
             return
 
         # Transform hashes
@@ -455,9 +497,11 @@ class FirstInstanceCallback(EventCallback):
         :param event: The original DXL event message that was received
         """
         # Decode the event payload
-        first_instance_dict = MessageUtils.json_payload_to_dict(event)
+        first_instance_dict = _decode_payload_dict(event)
+        if first_instance_dict is None:
+            return
 
-        if not _is_source_matched(first_instance_dict, event) and getattr(self, "_verify_source", False):
+        if getattr(self, "_verify_source", False) and not _is_source_matched(first_instance_dict, event):
             return
 
         # Transform hashes
