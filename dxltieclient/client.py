@@ -248,7 +248,7 @@ class TieClient(Client):
         :param filename: A file name to associate with the file (optional)
         :param comment: A comment to associate with the file (optional)
         """
-        if not trust_level:
+        if trust_level is None:
             raise ValueError("TrustLevel was not specified")
         if not self.valid_parameter(FileType, file_type):
             raise ValueError("FileType was not a valid entry")
